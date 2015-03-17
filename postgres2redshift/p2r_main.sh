@@ -6,7 +6,7 @@
   # License: Copyright (c) This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 3 of the License, or (at your option) any later version.
 
 # Load settings, tables file
-source /path_to_scripts/p2r_settings.sh
+source ./p2r_settings.sh
 
 
 ########################################
@@ -79,7 +79,7 @@ then
   exit 3
 fi
 
-# Close lock file sentinal protection. 
+# Close lock file sentinal protection.
 # If you are dumping from hot standby replication server, you can wrap the code here and move removing lockfile right before SHIPPPING TABLES TO S3
 # This is here for your convenience, it's not a requirement to have this.
   rm $LOCKFILE
@@ -91,192 +91,44 @@ else
   echo "  +------------------------------------"
 fi
 
+message() {
+  echo $1
+  date
+}
+
+run_script() {
+  message "$2 - STARTING"
+  source ./scripts/$1
+  message "$2 - COMPLETE"
+}
+
+
 ########################################
 #           Begin Data Dump
 ########################################
-
-echo DUMPING TABLES
-date
-
-# dumping original tables
-for table in $TABLES
-do
-  $PGSQL_BIN/psql -h $DBHOST -p $DBHOSTPORT -U $DBOWNER -d $DBNAME -c \
-    "\copy ${table} TO STDOUT (FORMAT csv, DELIMITER '|', HEADER 0)" \
-    | gzip > $DATADIR/${table}.txt.gz
-done
-
-# dumping custom tables
-for (( i = 0 ; i < ${#CTSQL[@]} ; i++ )) 
-do
-  $PGSQL_BIN/psql -h $DBHOST -p $DBHOSTPORT -U $DBOWNER -d $DBNAME -c \
-    "\copy ( ${CTSQL[$i]} ) TO STDOUT (FORMAT csv, DELIMITER '|', HEADER 0)" \
-    | gzip > $DATADIR/${CTNAMES[$i]}.txt.gz
-done
-
-echo DUMPING TABLES COMPLETE
-date
+run_script dump_tables.sh "DUMPING TABLES"
 
 ########################################
 #          SHIP TABLES TO S3
 ########################################
-
-echo SHIP TO S3
-date
-
-# ship original tables
-for table in $TABLES
-do
-  s3cmd put $DATADIR/${table}.txt.gz s3://$S3BUCKET/ --force 1>>$STDOUT 2>>$STDERR
-done
-
-# ship custom tables
-for table in ${CTNAMES[@]}
-do
-  s3cmd put $DATADIR/${table}.txt.gz s3://$S3BUCKET/ --force 1>>$STDOUT 2>>$STDERR
-done
-
-echo SHIP TO S3 COMPLETE
-date
-
+run_script ship_to_s3.sh "SHIP TO S3"
 
 ########################################
 #       Get and clean schema
 ########################################
+run_script clean_schema.sh "GET/CLEAN DB SCHEMA"
 
-echo GET/CLEAN/UPLOAD DB SCHEMA
-date
-
-# remove any schema* files from the directory
-rm -rf $SCRPTDIR/schema*
-
-# Dump DB's schema
-$PGSQL_BIN/pg_dump -h $DBHOST -p $DBHOSTPORT -U $DBOWNER --schema-only --schema=$DBSCHEMA $DBNAME > $SCRPTDIR/schema.sql
-
-##### 1. Cleanup the schema to conform to RedShift syntax
-
-## Only keep CREATE TABLE statements
-sed -n '/CREATE TABLE/,/);/p' $SCRPTDIR/schema.sql > $SCRPTDIR/schema_clean.sql
-## Append ALTER TABLE statements
-sed -n '/ALTER TABLE/,/;/p' $SCRPTDIR/schema.sql >> $SCRPTDIR/schema_clean.sql
-
-## Cleanup ALTER TABLE statements
-# Only keep PRIMARY KEYS, FOREIGN KEYS and UNIQUE. Current regex requires that the ALTER TABLE statement spaces two lines
-# http://unix.stackexchange.com/questions/26284/how-can-i-use-sed-to-replace-a-multi-line-string
-# http://stackoverflow.com/questions/6361312/negative-regex-for-perl-string-pattern-match
-perl -0777 -i -pe 's/ALTER TABLE(?!UNIQUE|PRIMARY|FOREIGN).*;//g' $SCRPTDIR/schema_clean.sql
-# Remove ONLY statement that is not supported
-perl -0777 -i -pe 's/ALTER TABLE ONLY/ALTER TABLE/g' $SCRPTDIR/schema_clean.sql
-# Remove CHECK CONSTRAINTS that Redshift doesn't support, along with last comma
-perl -0777 -i -pe 's/,\n(\s*CONSTRAINT.*\n)*(?=\)\;)//g' $SCRPTDIR/schema_clean.sql
-# Remove iterators on columns
-sed -i.bak 's/DEFAULT nextval.*/NOT NULL,/g' $SCRPTDIR/schema_clean.sql
-# Remove system DB tables
-sed -i.bak '/CREATE TABLE dba_snapshot*/,/);/d' $SCRPTDIR/schema_clean.sql
-sed -i.bak '/CREATE TABLE jbpm*/,/);/d' $SCRPTDIR/schema_clean.sql
-sed -i.bak '/ALTER TABLE jbpm*/,/;/d' $SCRPTDIR/schema_clean.sql
-# Remove unsupported commands and types (json, numeric(45))
-sed -i.bak 's/ON DELETE CASCADE//g' $SCRPTDIR/schema_clean.sql
-sed -i.bak 's/ON UPDATE CASCADE//g' $SCRPTDIR/schema_clean.sql
-sed -i.bak 's/SET default.*//g' $SCRPTDIR/schema_clean.sql
-sed -i.bak 's/numeric(45/numeric(37/g' $SCRPTDIR/schema_clean.sql
-sed -i.bak 's/json NOT NULL/text NOT NULL/g' $SCRPTDIR/schema_clean.sql
-# Replace columns named "open" with "open_date", as "open" is a reserved word. Other Redshift reserved words: time, user
-sed -i.bak 's/open character/open_date character/g' $SCRPTDIR/schema_clean.sql
-# TEXT type is not supported and auto converted, so need to enforce boundless varchar instead: http://docs.aws.amazon.com/redshift/latest/dg/r_Character_types.html
-# Also, remove all NOT NULL constraints on varchar/text types that break import due to collision with Redshift's BLANKSASNULL AND EMPTYASNULL copy flags
-# Removing NOT NULL on some tables may cause index errors in redshift.err log. If the issue cause problems, then just edit the regex to keep NOT NULL on columns that are supposed to be PRIMARY KEY
-sed -i.bak -e 's/\(.*\) \(\btext\b\|\bcharacter varying\b.*\) NOT NULL/\1 \2/' \
-      -e 's/\(.*\) \btext\b/\1 varchar(max)/' $SCRPTDIR/schema_clean.sql
-# Custom Cleaning (add any regex to clean out other edge cases if your schema fails to build in Redshift)
-sed -i.bak '/CREATE TABLE your_unwanted_table_name*/,/);/d' $SCRPTDIR/schema_clean.sql
-
-
-##### 2. Add sortkeys to table definitions (python script)
-
-$PYTHONBIN $SCRPTDIR/p2r_add_sortkeys.py -i $SCRPTDIR/schema_clean.sql -o $SCRPTDIR/schema_final.sql
-
-# take a nap for 30 seconds while python script completes (there are better approaches in notes)
-sleep 30
-
-##### 3. Add ALTER TABLE statements back to the final schema file
-
-sed -n '/ALTER TABLE/,/;/p' $SCRPTDIR/schema_clean.sql >> $SCRPTDIR/schema_final.sql
-
-##### 4. Restore data into a new schema, instead of nuking current schema
-
-# add search_path to temp_schema
-sed -i "1 i SET search_path TO ${TMPSCHEMA};" $SCRPTDIR/schema_final.sql
-
-echo CREATE NEW TEMP SCHEMA
-$PGSQL_BIN/psql -h $RSHOST -p $RSHOSTPORT -U $RSADMIN -d $RSNAME -c \
-  "CREATE SCHEMA $TMPSCHEMA;
-  SET search_path TO $TMPSCHEMA;
-  GRANT ALL ON SCHEMA $TMPSCHEMA TO $RSUSER;
-  GRANT USAGE ON SCHEMA $TMPSCHEMA TO $RSUSER;
-  GRANT SELECT ON ALL TABLES IN SCHEMA $TMPSCHEMA TO $RSUSER;
-  COMMENT ON SCHEMA $TMPSCHEMA IS 'temporary refresh schema';" 1>>$STDOUT 2>>$STDERR
-
-##### 5. Load schema file into TMPSCHEMA
-
-$PGSQL_BIN/psql -h $RSHOST -p $RSHOSTPORT -U $RSADMIN -d $RSNAME -f $SCRPTDIR/schema_final.sql 1>>$STDOUT 2>>$STDERR
-
+########################################
+#     Create Schema in Redshift
+########################################
+run_script create_schema.sh "CREATE SCHEMA IN READSHIFT"
 
 ########################################
 #        Restore in Redshift
 ########################################
+run_script restore_to_redshift.sh "RESTORE TABLES IN REDSHIFT"
 
-
-echo START RESTORE TABLES IN REDSHIFT
-date
-
-# Copy a table into Redshift from S3 file:
-  # To test without the data load, add NOLOAD to the copy command. 
-  # CSV cannot be used with FIXEDWIDTH, REMOVEQUOTES, or ESCAPE.
-  # Remove MAXERROR from production. Analysize /tmp/p2r.err for error log
-  # NULLify empties: BLANKSASNULL, EMPTYASNULL.
-
-# restore original tables
-for table in $TABLES
-do
-  $PGSQL_BIN/psql -h $RSHOST -p $RSHOSTPORT -U $RSADMIN -d $RSNAME -c \
-    "SET search_path TO $TMPSCHEMA;
-    copy ${table} from 's3://$S3BUCKET/${table}.txt.gz' \
-      CREDENTIALS 'aws_access_key_id=$RSKEY;aws_secret_access_key=$RSSECRET' \
-      CSV DELIMITER '|' IGNOREHEADER 0 ACCEPTINVCHARS TRUNCATECOLUMNS GZIP TRIMBLANKS BLANKSASNULL EMPTYASNULL DATEFORMAT 'auto' ACCEPTANYDATE COMPUPDATE ON MAXERROR 100;" 1>>$STDOUT 2>>$STDERR
-done
-
-# restore custom tables
-for table in ${CTNAMES[@]}
-do
-  $PGSQL_BIN/psql -h $RSHOST -p $RSHOSTPORT -U $RSADMIN -d $RSNAME -c \
-    "SET search_path TO $TMPSCHEMA;
-    copy ${table} from 's3://$S3BUCKET/${table}.txt.gz' \
-      CREDENTIALS 'aws_access_key_id=$RSKEY;aws_secret_access_key=$RSSECRET' \
-      CSV DELIMITER '|' IGNOREHEADER 0 ACCEPTINVCHARS TRUNCATECOLUMNS GZIP TRIMBLANKS BLANKSASNULL EMPTYASNULL DATEFORMAT 'auto' ACCEPTANYDATE COMPUPDATE ON MAXERROR 100;" 1>>$STDOUT 2>>$STDERR
-done
-
-# Swap temp_schema for production schema
-echo DROP $RSSCHEMA AND RENAME $TMPSCHEMA SCHEMA TO $RSSCHEMA
-$PGSQL_BIN/psql -h $RSHOST -p $RSHOSTPORT -U $RSADMIN -d $RSNAME -c \
-  "SET search_path TO $RSSCHEMA;
-  DROP SCHEMA IF EXISTS $RSSCHEMA CASCADE;
-  ALTER SCHEMA $TMPSCHEMA RENAME TO $RSSCHEMA;
-  GRANT ALL ON SCHEMA $RSSCHEMA TO $RSUSER;
-  GRANT USAGE ON SCHEMA $RSSCHEMA TO $RSUSER;
-  GRANT SELECT ON ALL TABLES IN SCHEMA $RSSCHEMA TO $RSUSER;
-  COMMENT ON SCHEMA $RSSCHEMA IS 'analytics data schema';" 1>>$STDOUT 2>>$STDERR
-
-echo RESTORE TABLES COMPLETE
-date
-
-echo START VACUUM ANALYZE 
-
-$PGSQL_BIN/psql -h $RSHOST -p $RSHOSTPORT -U $RSADMIN -d $RSNAME -c "vacuum; analyze;" 1>>$STDOUT 2>>$STDERR
-
-echo BULK REFRESH COMPLETE
-
-date
+message "BULK REFRESH COMPLETE"
 echo "***********************************"
 
 
@@ -288,7 +140,7 @@ echo "***********************************"
   # solution: DATEFORMAT 'auto' ACCEPTANYDATE options, which NULLs any unrecognized date formats
 
 # Query to check errors in redshift
-  # select starttime, filename, line_number, colname, position, raw_line, raw_field_value, err_code, err_reason 
+  # select starttime, filename, line_number, colname, position, raw_line, raw_field_value, err_code, err_reason
   # from stl_load_errors
   # where filename like ('%table_name%')
   # order by starttime DESC
