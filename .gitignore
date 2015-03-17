@@ -1,1 +1,3 @@
 postgres2redshift/settings.sh
+postgres2redshift/sql/*
+

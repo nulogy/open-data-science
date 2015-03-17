@@ -15,3 +15,4 @@ do
     "\copy ( ${CTSQL[$i]} ) TO STDOUT (FORMAT csv, DELIMITER '|', HEADER 0)" \
     | gzip > $DATADIR/${CTNAMES[$i]}.txt.gz
 done
+
