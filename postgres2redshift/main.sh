@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 ### LICENSE
   # Author: Vlad Dubovskiy, November 2014, DonorsChoose.org
@@ -6,7 +6,15 @@
   # License: Copyright (c) This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 3 of the License, or (at your option) any later version.
 
 # Load settings, tables file
-source ./settings.sh
+SETTINGS_FILE=./settings.sh
+
+if [ -e $SETTINGS_FILE ]; then
+  echo "Loading settings: $SETTINGS" 
+  source $SETTINGS_FILE
+else
+  echo "Could not load settings file"
+  exit
+fi
 
 
 ########################################
