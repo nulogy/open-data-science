@@ -1,3 +1,5 @@
 postgres2redshift/settings.sh
 postgres2redshift/sql/*
+postgres2vertica/settings.sh
+postgres2vertica/sql/*
 
