@@ -110,16 +110,15 @@ run_script() {
   message "$2 - COMPLETE"
 }
 
-
 ########################################
 #           Begin Data Dump
 ########################################
-run_script dump_tables.sh "DUMPING TABLES"
+# run_script dump_tables.sh "DUMPING TABLES"
 
 ########################################
 #          SHIP TABLES TO S3
 ########################################
-run_script ship_to_s3.sh "SHIP TO S3"
+# run_script ship_to_s3.sh "SHIP TO S3"
 
 ########################################
 #       Get and clean schema
@@ -129,7 +128,7 @@ run_script clean_schema.sh "GET/CLEAN DB SCHEMA"
 ########################################
 #     Create Schema in Redshift
 ########################################
-# run_script create_schema.sh "CREATE SCHEMA IN READSHIFT"
+run_script create_schema.sh "CREATE SCHEMA IN REDSHIFT"
 
 ########################################
 #        Restore in Redshift
