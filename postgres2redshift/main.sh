@@ -9,7 +9,7 @@
 SETTINGS_FILE=./settings.sh
 
 if [ -e $SETTINGS_FILE ]; then
-  echo "Loading settings: $SETTINGS" 
+  echo "Loading settings: $SETTINGS"
   source $SETTINGS_FILE
 else
   echo "Could not load settings file"
@@ -129,12 +129,12 @@ run_script clean_schema.sh "GET/CLEAN DB SCHEMA"
 ########################################
 #     Create Schema in Redshift
 ########################################
-run_script create_schema.sh "CREATE SCHEMA IN READSHIFT"
+# run_script create_schema.sh "CREATE SCHEMA IN READSHIFT"
 
 ########################################
 #        Restore in Redshift
 ########################################
-run_script restore_to_redshift.sh "RESTORE TABLES IN REDSHIFT"
+# run_script restore_to_redshift.sh "RESTORE TABLES IN REDSHIFT"
 
 message "BULK REFRESH COMPLETE"
 echo "***********************************"
