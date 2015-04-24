@@ -113,12 +113,12 @@ run_script() {
 ########################################
 #           Begin Data Dump
 ########################################
-# run_script dump_tables.sh "DUMPING TABLES"
+run_script dump_tables.sh "DUMPING TABLES"
 
 ########################################
 #          SHIP TABLES TO S3
 ########################################
-# run_script ship_to_s3.sh "SHIP TO S3"
+run_script ship_to_s3.sh "SHIP TO S3"
 
 ########################################
 #       Get and clean schema
@@ -133,7 +133,7 @@ run_script create_schema.sh "CREATE SCHEMA IN REDSHIFT"
 ########################################
 #        Restore in Redshift
 ########################################
-# run_script restore_to_redshift.sh "RESTORE TABLES IN REDSHIFT"
+run_script restore_to_redshift.sh "RESTORE TABLES IN REDSHIFT"
 
 message "BULK REFRESH COMPLETE"
 echo "***********************************"

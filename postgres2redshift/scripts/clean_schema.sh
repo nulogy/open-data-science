@@ -67,6 +67,3 @@ sleep 30
 sed -n '/ALTER TABLE/,/;/p' $SCHEMADIR/schema_clean.sql >> $SCHEMADIR/schema_final.sql
 
 ##### 4. Restore data into a new schema, instead of nuking current schema
-
-# add search_path to temp_schema
-sed -i "1 i SET search_path TO ${TMPSCHEMA};" $SCHEMADIR/schema_final.sql
